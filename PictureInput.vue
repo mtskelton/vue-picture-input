@@ -38,7 +38,7 @@
         <button v-if="removable" @click.prevent="removeImage" :class="removeButtonClass" type="button">{{ strings.remove }}</button>
       </div>
     </div>
-    <input ref="fileInput" type="file" :name="name" :id="id" :accept="accept" @change="onFileChange" :capture="capture" />
+    <input ref="fileInput" type="file" :name="name" :id="id" :accept="accept" :multiple="multiple" @change="onFileChange" :capture="capture" />
   </div>
 </template>
 
@@ -146,6 +146,10 @@ export default {
       default: () => {
         return {}
       }
+    },
+    multiple: {
+      type: Boolean,
+      default: false
     }
   },
   watch: {
@@ -254,21 +258,56 @@ export default {
       this.onDragLeave()
       this.onFileChange(e)
     },
+    checkFile(file) {
+      if (file.size <= 0 || file.size > this.size * 1024 * 1024) {
+        this.$emit('error', {
+          type: 'fileSize',
+          fileSize: file.size,
+          fileType: file.type,
+          fileName: file.name,
+          message: this.strings.fileSize + ' (' + this.size + 'MB)'
+        })
+        return false
+      }
+
+      if (this.accept === 'image/*') {
+        if (file.type.substr(0, 6) !== 'image/') {
+          return false
+        }
+      } else {
+        if (this.fileTypes.indexOf(file.type) === -1) {
+          this.$emit('error', {
+            type: 'fileType',
+            fileSize: files[0].size,
+            fileType: files[0].type,
+            fileName: files[0].name,
+            message: this.strings.fileType
+          })
+          return false
+        }
+      }
+      return true
+    },
     onFileChange (e, prefill) {
       let files = e.target.files || e.dataTransfer.files
       if (!files.length) {
         return
       }
-      if (files[0].size <= 0 || files[0].size > this.size * 1024 * 1024) {
-        this.$emit('error', {
-          type: 'fileSize',
-          fileSize: files[0].size,
-          fileType: files[0].type,
-          fileName: files[0].name,
-          message: this.strings.fileSize + ' (' + this.size + 'MB)'
-        })
-        return
+
+      for (let file of files) {
+        if (!this.checkFile(file)) {
+          return
+        }
       }
+
+      if (this.multiple) {
+        for (let file of files) {
+          this.loadImageObject(file, imageResults => {
+            this.$emit('loaded', imageResults.image)
+          })
+        }
+      }
+
       if (files[0].name === this.fileName && files[0].size === this.fileSize && this.fileModified === files[0].lastModified) {
         return
       }
@@ -279,22 +318,6 @@ export default {
       this.fileModified = files[0].lastModified
       this.fileType = files[0].type
 
-      if (this.accept === 'image/*') {
-        if (files[0].type.substr(0, 6) !== 'image/') {
-          return
-        }
-      } else {
-        if (this.fileTypes.indexOf(files[0].type) === -1) {
-          this.$emit('error', {
-            type: 'fileType',
-            fileSize: files[0].size,
-            fileType: files[0].type,
-            fileName: files[0].name,
-            message: this.strings.fileType
-          })
-          return
-        }
-      }
       this.imageSelected = true
       this.image = ''
       if (this.supportsPreview) {
@@ -313,28 +336,38 @@ export default {
       }
     },
     loadImage (file, prefill) {
+      this.loadImageObject(file, imageResults => {
+        this.image = imageResults.image
+        this.setOrientation(imageResults.orientation)
+
+        if (prefill) {
+          this.$emit('prefill')
+        } else {
+          this.$emit('change', this.image)
+        }
+
+        this.imageObject = new Image()
+        this.imageObject.onload = () => {
+          if (this.autoToggleAspectRatio) {
+            let canvasOrientation = this.getOrientation(this.canvasWidth, this.canvasHeight)
+            let imageOrientation = this.getOrientation(this.imageObject.width, this.imageObject.height)
+            if (canvasOrientation !== imageOrientation) {
+              this.rotateCanvas()
+            }
+          }
+          this.drawImage(this.imageObject)
+        }
+        this.imageObject.src = this.image
+      })
+    },
+    loadImageObject (file, callback) {
       this.getEXIFOrientation(file, orientation => {
-        this.setOrientation(orientation)
         let reader = new FileReader()
         reader.onload = e => {
-          this.image = e.target.result
-          if (prefill) {
-            this.$emit('prefill')
-          } else {
-            this.$emit('change', this.image)
-          }
-          this.imageObject = new Image()
-          this.imageObject.onload = () => {
-            if (this.autoToggleAspectRatio) {
-              let canvasOrientation = this.getOrientation(this.canvasWidth, this.canvasHeight)
-              let imageOrientation = this.getOrientation(this.imageObject.width, this.imageObject.height)
-              if (canvasOrientation !== imageOrientation) {
-                this.rotateCanvas()
-              }
-            }
-            this.drawImage(this.imageObject)
-          }
-          this.imageObject.src = this.image
+          callback({
+            image: e.target.result,
+            orientation: orientation
+          })
         }
         reader.readAsDataURL(file)
       })
